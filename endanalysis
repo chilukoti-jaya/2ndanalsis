@@ -1,0 +1,110 @@
+import pandas as pd
+
+def analyze_by_login(df):
+    """
+    Analyze employee records grouped by empid, login_id, and emp_type
+    """
+    # Group by empid, login_id, and emp_type
+    grouped = df.groupby(['empid', 'login_id', 'emp_type']).agg({
+        'deleted_flag': list,
+        'status': list
+    }).reset_index()
+    
+    # Add analysis columns
+    grouped['has_deleted_conflict'] = grouped['deleted_flag'].apply(
+        lambda x: 'Y' in [str(i).upper() for i in x] and 'N' in [str(i).upper() for i in x]
+    )
+    grouped['has_valid_status'] = grouped['status'].apply(
+        lambda statuses: any(str(s).upper() in ['A', 'L'] for s in statuses)
+    )
+    
+    # Filter valid conflicts and create new DataFrame
+    valid_conflicts = grouped[
+        grouped['has_deleted_conflict'] & 
+        grouped['has_valid_status']
+    ].copy()
+    
+    non_conflicts = grouped[
+        ~(grouped['has_deleted_conflict'] & 
+          grouped['has_valid_status'])
+    ].copy()
+    
+    # Process valid conflicts
+    if len(valid_conflicts) > 0:
+        # Create a new DataFrame with exactly the columns we want
+        valid_conflicts_processed = pd.DataFrame({
+            'empid': valid_conflicts['empid'],
+            'login_id': valid_conflicts['login_id'],
+            'emp_type': valid_conflicts['emp_type'],
+            'status_summary': valid_conflicts['status'].apply(
+                lambda x: ', '.join(sorted(set(str(i).upper() for i in x if str(i).strip())))
+            ),
+            'deleted_flag_summary': valid_conflicts['deleted_flag'].apply(
+                lambda x: ', '.join(sorted(set(str(i).upper() for i in x if str(i).strip())))
+            ),
+            'has_deleted_conflict': valid_conflicts['has_deleted_conflict'],
+            'has_valid_status': valid_conflicts['has_valid_status']
+        })
+    else:
+        valid_conflicts_processed = pd.DataFrame(columns=[
+            'empid', 'login_id', 'emp_type', 'status_summary', 
+            'deleted_flag_summary', 'has_deleted_conflict', 'has_valid_status'
+        ])
+    
+    # Process non-conflicts
+    if len(non_conflicts) > 0:
+        non_conflicts_processed = pd.DataFrame({
+            'empid': non_conflicts['empid'],
+            'login_id': non_conflicts['login_id'],
+            'emp_type': non_conflicts['emp_type'],
+            'status_summary': non_conflicts['status'].apply(
+                lambda x: ', '.join(sorted(set(str(i).upper() for i in x if str(i).strip())))
+            ),
+            'deleted_flag_summary': non_conflicts['deleted_flag'].apply(
+                lambda x: ', '.join(sorted(set(str(i).upper() for i in x if str(i).strip())))
+            ),
+            'reason': non_conflicts.apply(lambda row: get_exclusion_reason(row), axis=1)
+        })
+    else:
+        non_conflicts_processed = pd.DataFrame(columns=[
+            'empid', 'login_id', 'emp_type', 'status_summary', 
+            'deleted_flag_summary', 'reason'
+        ])
+    
+    return valid_conflicts_processed, non_conflicts_processed
+
+def get_exclusion_reason(row):
+    """Helper function to determine why a record was excluded from conflicts"""
+    if not row['has_deleted_conflict']:
+        return "No deleted flag conflict"
+    if not row['has_valid_status']:
+        return "No Active/Leave status found"
+    return "Unknown"
+
+# Example usage
+try:
+    # Read the Excel file
+    excel_path = "your_excel_file.xlsx"  # Replace with your Excel file path
+    df = pd.read_excel(excel_path)
+    
+    # Clean the data
+    string_columns = ['empid', 'login_id', 'emp_type', 'deleted_flag', 'status']
+    for col in string_columns:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+            df[col] = df[col].replace('nan', '')
+    
+    # Run the analysis
+    conflicts, non_conflicts = analyze_by_login(df)
+    
+    print("\nConflicts found (grouped by Employee ID and Login ID):")
+    print(conflicts[['empid', 'login_id', 'emp_type', 'status_summary', 'deleted_flag_summary']])
+    
+    # Save to Excel
+    with pd.ExcelWriter('employee_login_analysis.xlsx') as writer:
+        conflicts.to_excel(writer, sheet_name='Conflicts', index=False)
+        non_conflicts.to_excel(writer, sheet_name='NonConflicts', index=False)
+    
+except Exception as e:
+    print(f"An error occurred: {str(e)}")
+    print("Please check your Excel file structur
